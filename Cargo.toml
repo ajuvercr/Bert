@@ -1,0 +1,9 @@
+[package]
+name = "bert"
+version = "0.1.0"
+authors = ["silvius"]
+edition = "2018"
+
+[dependencies]
+rodio = "0.8.1"
+

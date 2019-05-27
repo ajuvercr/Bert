@@ -5,8 +5,7 @@ authors = ["silvius"]
 edition = "2018"
 
 [dependencies]
-tokio = "0.1"
-futures = "0.1"
+ws = "0.8.1"
 
 [target.heroku]
 version = "nightly"

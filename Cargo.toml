@@ -5,11 +5,7 @@ authors = ["silvius"]
 edition = "2018"
 
 [dependencies]
-rodio = "0.8.1"
-rocket = "0.4.0"
-error-chain = "0.12.0"
-rand = "0.6.5"
-rocket_contrib = "0.4.0"
+iron = "*"
 
 [target.heroku]
 version = "nightly"

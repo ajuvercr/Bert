@@ -6,11 +6,13 @@ use std::env;
 
 fn main() {
     let port = env::var("PORT").unwrap_or(String::from("80"));
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("wss://serene-fortress-87984.herokuapp.com/");
 
+    println!("connecting to {}", addr);
     listen(&addr, |out| {
         move |msg| {
-        out.send(msg)
-    }
+            println!("responding {}", msg);
+            out.send(msg)
+        }
     }).unwrap()
 }

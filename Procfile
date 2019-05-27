@@ -1,2 +1,1 @@
-web: ./target/release/hello
-
+web: ./target/release/bert

@@ -8,7 +8,7 @@ use std::env;
 
 fn main() {
     let port = env::var("PORT").unwrap_or(String::from("80"));
-    let addr = format!("127.0.0.1:{}", port).parse().unwrap();
+    let addr = format!("0.0.0.0:{}", port).parse().unwrap();
     let listener = TcpListener::bind(&addr).unwrap();
 
     // Here we convert the `TcpListener` to a stream of incoming connections
@@ -40,7 +40,7 @@ fn main() {
         println!("accept error = {:?}", err);
     });
 
-    println!("server running on localhost:{}", port);
+    println!("server running on 0.0.0.0:{}", port);
 
     // Start the server
     //

@@ -10,6 +10,7 @@ use ws::{connect, CloseCode, Message, Sender, Handler};
 use futures::Future;
 use futures::stream::Stream;
 use futures::prelude::*;
+use futures::future::lazy;
 
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::io::{ReadHalf, WriteHalf};
@@ -24,8 +25,8 @@ use std::mem;
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
-        println!("WTF BRO");
-        println!("Please specify inner and outer address");
+        eprintln!("WTF BRO");
+        eprintln!("Please specify inner and outer address");
         ::std::process::exit(1);
     }
     let inner_address = args[1].parse().unwrap();
@@ -38,28 +39,33 @@ fn main() -> io::Result<()> {
     println!("Listening on: {:?}", inner_address);
 
     let done = socket.incoming().for_each(move |(socket, addr)| {
+
         println!("got conntection from {}", addr);
         let socket = Arc::new(Mutex::new(Some(socket)));
         let outer_address = outer_address.clone();
 
-        connect(outer_address.clone(), move |out| {
-            println!("connecting to {}", outer_address.clone());
+        tokio::spawn(lazy(
+            move || {
 
-            let socket = mem::replace(
-                &mut *socket.clone().lock().map_err(|_| ()).unwrap(), 
-                None
-            ).unwrap();
+                connect(outer_address.clone(), move |out| {
+                    println!("connecting to {}", outer_address.clone());
 
-            let (reader, writer) = socket.split();
+                    let socket = mem::replace(
+                        &mut *socket.clone().lock().map_err(|_| ()).unwrap(), 
+                        None
+                    ).unwrap();
 
-            println!("here");
+                    let (reader, writer) = socket.split();
 
-            tokio::spawn(
-                WriteFuture::new(reader, out.clone())
-            );
+                    tokio::spawn(
+                        WriteFuture::new(reader, out.clone())
+                    );
 
-            Writer { writer }
-        }).map_err(|e| println!("failed {:?}",e )).unwrap();
+                    Writer { writer }
+                }).map_err(|e| eprintln!("failed {:?}",e )).unwrap();
+                Ok(())
+            }
+        ));
 
         Ok(())
     });
@@ -110,19 +116,18 @@ impl<S> Future for WriteFuture<S>
         type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        println!("polling");
 
         loop {
             let mut buffer = Vec::new();
 
-            let size = try_ready!(self.reader.read_buf(&mut buffer).map_err(|e| println!("{:?}", e)));
+            let size = try_ready!(self.reader.read_buf(&mut buffer).map_err(|e| eprintln!("{:?}", e)));
 
-            let msg = String::from_utf8(buffer.clone());
-
-            println!("got {:?} with size {}", msg, size);
+            if size == 0 {
+                return Ok(Async::NotReady);
+            }
 
             self.sender.send(Message::Binary(buffer))
-                .map_err(|e| println!("{:?}", e)).unwrap();
+                .map_err(|e| eprintln!("{:?}", e)).unwrap();
         }
     }
 }

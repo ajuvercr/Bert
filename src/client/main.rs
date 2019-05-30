@@ -4,6 +4,7 @@ extern crate futures;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio;
+extern crate bert;
 
 use ws::{connect, CloseCode, Message, Sender, Handler};
 
@@ -21,6 +22,8 @@ use std::io::{self, Write};
 use std::env;
 use std::sync::{Arc, Mutex};
 use std::mem;
+
+use bert::broker;
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();

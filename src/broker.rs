@@ -8,46 +8,46 @@ use std::sync::mpsc;
 use std::marker::PhantomData;
 use std::collections::HashMap;
 
-struct Message(u8, Vec<u8>);
+type CreateClientFuture = Box<Future<Item=(Box<dyn AsyncRead>, Box<dyn AsyncWrite>), Error= ()>>;
 
-pub struct Broker<S> {
+enum Message {
+    Data(u8, Vec<u8>),
+    ConnectClient(Box<'static + Send + AsyncRead>, Box<'static + Send + AsyncWrite>),
+}
+
+pub struct Broker<S, F> {
     map: HashMap<u8, mpsc::Sender<Vec<u8>>>,
     handle: mpsc::Sender<Message>,
     socket: S,
-    clientNotFound: Box<Fn()->Result<(), ()>>,
+    clientNotFound: F,
 }
 
-impl<S> Broker<S> {
+impl<S, F> Broker<S, F>
+    where 
+        S: 'static + Send + AsyncRead,
+        F: 'static + Send + FnMut () -> CreateClientFuture {
 
-    pub fn new(socket: S, clientNotFound: Box<Fn()->Result<(), ()>>) -> Self {
+    pub fn new(socket: S, clientNotFound: F) -> impl FnMut (Box<dyn AsyncRead>, Box<dyn AsyncWrite>) -> () {
         let (sender, receiver) = mpsc::channel();
 
-        Broker {
+        let broker = Broker {
             map: HashMap::new(),
-            handle: sender,
+            handle: sender.clone(),
             socket,
             clientNotFound
+        };
+
+        tokio::spawn(broker);
+
+        |read, write| {
+            sender.clone().send(Message::ConnectClient(read, write)).expect("Couldn't send to server");
         }
     }
-
-    pub fn add_connection<SS>(&mut self, socket: SS) -> Option<mpsc::Receiver<Vec<u8>>> 
-        where SS: 'static + AsyncRead + Send {
-        let id = 0; // TODO: generate id
-        let (sender, receiver) = mpsc::channel();
-
-        self.map.insert(id, sender);
-
-        tokio::spawn(
-            IncomingHandler::new(socket, self.handle.clone(), id)
-        );
-
-        Some(receiver)
-    }
-
 }
 
-impl<S> Future for Broker<S> 
-    where S: AsyncRead {
+impl<S, F> Future for Broker<S, F> 
+    where S: AsyncRead,
+        F: FnMut () -> CreateClientFuture {
     type Item = ();
     type Error = ();
 
@@ -69,9 +69,9 @@ impl<S> Future for Broker<S>
 
             self.map.get(&id).map_or_else(|| {
                     println!("No client found with id {}", id);
-                    while let Ok(_) = (&self.clientNotFound)() {
+                    // while let Ok(_) = &(&self.clientNotFound)() {
 
-                    }
+                    // }
                 }, 
                 |s| s.send(buffer).expect("Coudln't send message"));
 
@@ -82,21 +82,22 @@ impl<S> Future for Broker<S>
 }
 
 
-struct IncomingHandler<S> {
+
+struct ClientReceiver<S> {
     socket: S,
     server_handle: mpsc::Sender<Message>,
     id: u8,
 }
 
-impl<S> IncomingHandler<S> {
+impl<S> ClientReceiver<S> {
     fn new(socket: S, server_handle: mpsc::Sender<Message>, id: u8) -> Self {
-        IncomingHandler {
+        ClientReceiver {
             socket, server_handle, id
         }
     }
 }
 
-impl<S> Future for IncomingHandler<S> 
+impl<S> Future for ClientReceiver<S> 
     where S: AsyncRead {
 
     type Item = ();
@@ -116,7 +117,7 @@ impl<S> Future for IncomingHandler<S>
                 return Ok(Async::Ready(()));
             }
 
-            self.server_handle.send(Message(self.id, buffer)).expect("Couldn't send to server");
+            self.server_handle.send(Message::Data(self.id, buffer)).expect("Couldn't send to server");
         }
     }
 }

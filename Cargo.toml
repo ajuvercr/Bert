@@ -13,6 +13,7 @@ tokio-timer = "0.2.11"
 tokio = "0.1.20"
 atomic-counter = "1.0.1"
 bytes = "0.4.12"
+websocket = "0.22.4"
 
 [target.heroku]
 version = "nightly"
@@ -32,3 +33,11 @@ path = "src/bin/server/main.rs"
 [[bin]]
 name = "echo"
 path = "src/bin/ws_echo.rs"
+
+[[bin]]
+name = "connect"
+path = "src/bin/connect.rs"
+
+[[bin]]
+name = "tcp_echo"
+path = "src/bin/tcp_echo.rs"

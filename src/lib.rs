@@ -15,6 +15,8 @@ use std::collections::HashMap;
 mod client;
 mod server;
 
+pub mod ws;
+
 type CreateClientFuture<R, W> = Box<Future<Item=(R, W), Error= ()> + Send>;
 
 #[derive(Debug)]
@@ -110,10 +112,11 @@ impl<F, R, W> Future for Broker<F, R, W>
                         },
                         None => {
                             tokio::spawn({
-                                let handle = self.handle.clone();
+                                let mut handle = self.handle.clone();
 
                                 (self.client_not_found)().map(move |(read, write)| {
                                     create_client(read, write, id, handle.clone());
+                                    handle.try_send(Message::ToClient(id, msg)).expect("HMMMM");
                                     ()
                                 })
                             });
@@ -125,17 +128,11 @@ impl<F, R, W> Future for Broker<F, R, W>
                     msg.push(id);
                     self.server_write.try_send(msg).expect("Couldn't send to server");;
                 },
-                Message::ConnectClient(id, channel) => {
+                Message::ConnectClient(id, mut channel) => {
                     if self.map.contains_key(&id) {
                         eprintln!("Already found client with id {}", id);
                     } else {
-                        let mut c = channel.clone();
-                        tokio::spawn(lazy(move || {
-                            tokio_timer::Delay::new(Instant::now() + Duration::new(2, 0)).then(move |_|{
-                                c.try_send(b"Testing\n".to_vec()).expect("bla");
-                                Ok(())
-                            })
-                        }));
+                        // channel.try_send(b"hallo".to_vec()).expect("Hm");
                         self.map.insert(id, channel);
                     }
                 },

@@ -1,240 +1,142 @@
-#[macro_use]
+
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio;
+extern crate ws;
+extern crate bert;
+extern crate bytes;
 
-use ws::{connect, CloseCode, Message, Sender, Handler, listen};
+use bytes::BufMut;
+use ws::{Message, Sender, listen};
 
-use futures::Future;
 use futures::stream::Stream;
 use futures::prelude::*;
 use futures::future::lazy;
+use futures::failed;
+use futures::sync::mpsc;
+
 
 use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_io::io::{ReadHalf, WriteHalf};
-use tokio_core::net::{TcpListener, TcpStream};
-use tokio_core::reactor::Core;
 
 use std::env;
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::mem;
+use std::io;
 
-type ClientsMap = Arc<Mutex<HashMap<u8, mpsc::Sender<Msg>>>>;
-
-#[derive(Debug)]
-struct State(Option<(ClientsMap, mpsc::Sender<Msg>)>);
-
-impl State {
-    fn new() -> Self {
-        Self(None)
-    }
-    // Add connection to self
-    fn handle(&mut self, socket: Sender) -> Box<dyn Handler> {
-
-        let (sender, reciever) = mpsc::channel();
-
-        match &self.0 {
-            Some((map, ss)) => {
-
-                println!("Connecting to client");
-                tokio::spawn(
-                    ClientWriter::new(reciever, socket.clone())
-                );
-                
-                Box::new(ClientReceiver::new(ss.clone()))
-            },
-
-            None => {
-
-                println!("Connecting to application");
-                tokio::spawn(
-                        ServerWriter::new(reciever, socket.clone())
-                );
-
-                mem::replace(&mut self.0, Some((
-                    Arc::new(Mutex::new(HashMap::new())),
-                    sender.clone()
-                )));
-                
-                Box::new(ServerReceiver::new(sender))
-
-            }
-        }
-
-    }
-}
-
-#[derive(Debug)]
-struct Msg {
-    id: u8,
-    payload: Vec<u8>
-}
-
-impl Msg {
-    fn to_bytes(mut self) -> Vec<u8> {
-        self.payload.push(self.id);
-
-        self.payload
-    }
-
-    fn from_bytes(mut bytes: Vec<u8>) -> Self {
-        let id = bytes.pop().unwrap();
-
-        Msg {
-            id, payload: bytes
-        }
-    }
-}
+type MyF = FnMut (WSRead, WSWrite) -> ();
 
 fn main() {
-
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("WTF BRO");
-        eprintln!("Please specify port number");
+        eprintln!("WTF BRO, pleas specify port");
         ::std::process::exit(1);
     }
-    let port = args.get(1).map(|x| x.clone()).unwrap_or("80".to_string());
-    let addr = String::from("0.0.0.0:")+&port;
 
-    let state: Arc<Mutex<State>> = Arc::new(Mutex::new(State::new()));
+    let port = args[1].clone();
 
+    tokio::run(lazy(
+        move || {
+            let state = Arc::new(Mutex::new(None));
+            listen(format!("0.0.0.0:{}",port), |connection| {
+                println!("Got connection {:?}", connection);
+                let (sender, receiver) = mpsc::channel(10);
 
-    println!("connecting to {}", addr);
-    listen(&addr, move |socket| {
+                let reader = WSRead::new(receiver);
+                let writer = WSWrite(connection.clone());
 
-        let state = state.clone();
+                println!("I'm here!");
+                let mut state: MutexGuard<'_, Option<Box<MyF>>> = state.lock().expect("Couldn lock state");
+                match *state {
+                    Some(ref mut f) => f(reader, writer),
+                    None => {
+                        mem::replace(&mut *state, Some(Box::new(bert::Broker::<_, WSRead, WSWrite>::new(
+                            reader, writer, || {
+                                println!("Can't handle message, because no client");
+                                Box::new(failed::<(_,_), ()>(()))
+                            }
+                        ))));
+                    },
+                }
 
-        let mut s = state.lock().expect("Couldn't lock mutex");
+                move |msg| {
+                    let mut sender = sender.clone();
+                    println!("Got ws message {:?}", msg);
+                    match msg {
+                        Message::Binary(bin) => sender.try_send(bin.to_vec()),
+                        Message::Text(text) => sender.try_send(text.as_bytes().to_vec()),
+                    }.expect("Couldn't send message");
+                    Ok(())
+                }
+            }).unwrap();
 
-        HandlerHandler(s.handle(socket))
-    }).unwrap()
+            Ok(())
+        }));
+
 }
 
-struct HandlerHandler(Box<dyn Handler>);
-
-impl Handler for HandlerHandler {
-    fn on_message(&mut self, msg: Message) -> ws::Result<()> {
-        return self.0.on_message(msg);
-    }
+struct WSRead {
+    inner: mpsc::Receiver<Vec<u8>>,
 }
 
-struct ServerReceiver {
-    writer: mpsc::Sender<Msg>,
-}
-
-impl ServerReceiver {
-    fn new(writer: mpsc::Sender<Msg>) -> Self {
-        Self { writer }
-    }
-}
-
-impl Handler for ServerReceiver {
-
-    fn on_message(&mut self, msg: Message) -> ws::Result<()> {
-        println!("got message {:?}", msg);
-        if let Message::Binary(bin) = msg {
-            self.writer.send(Msg::from_bytes(bin)).expect("Couldn't send message");
-        }
-
-        Ok(())
-    }
-}
-
-struct ClientReceiver {
-    writer: mpsc::Sender<Msg>,
-    id: u8,
-}
-
-impl ClientReceiver {
-    fn new(writer: mpsc::Sender<Msg>) -> Self {
-        Self { writer, id: 0 }
-    }
-}
-
-impl Handler for ClientReceiver {
-
-    fn on_message(&mut self, msg: Message) -> ws::Result<()> {
-        // TODO add identifier to message before sending to server writer
-        println!("got message {:?}", msg);
-
-        if let Message::Binary(bin) = msg {
-            self.writer.send(Msg {
-                id: self.id,
-                payload: bin
-            }).expect("Couldn't send message here");
-        }
-
-        Ok(())
-    }
-}
-
-struct ServerWriter {
-    reader: mpsc::Receiver<Msg>,
-    sender: Sender, 
-}
-
-impl ServerWriter {
-    fn new(reader: mpsc::Receiver<Msg>, sender: Sender) -> Self {
+impl WSRead {
+    fn new(inner: mpsc::Receiver<Vec<u8>>) -> Self {
         Self {
-            reader,
-            sender,
+            inner
         }
     }
 }
 
-impl Future for ServerWriter {
-        type Item = ();
-        type Error = ();
+impl AsyncRead for WSRead {
+    unsafe fn prepare_uninitialized_buffer(&self, _: &mut [u8]) -> bool {
+        false
+    }
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        
-        // TODO get identifier to msg before sending
-        while let Ok(msg) = self.reader.try_recv() {
-            println!("Sending {:?}", msg);
-
-            match self.sender.send(Message::Text("message".to_string())) {
-                Ok(()) => {},
-                Err(e) => eprintln!("{:?}", e),
+    fn read_buf<B>(&mut self, buf: &mut B) -> Poll<usize, io::Error> 
+        where B: BufMut {
+            println!("Polling channel");
+            if let Ok(Async::Ready(Some(mut buffer))) = self.inner.poll() {
+                println!("Reading to buffer {:?}", buffer);
+                buf.put_slice(&mut buffer);
+                Ok(buffer.len().into())
+            } else {
+                Ok(Async::NotReady)
             }
-        }
-
-        Ok(Async::NotReady)
     }
 }
 
-struct ClientWriter {
-    reader: mpsc::Receiver<Msg>,
-    sender: Sender,
-}
-
-impl ClientWriter {
-    fn new(reader: mpsc::Receiver<Msg>, sender: Sender) -> Self {
-        Self {
-            reader,
-            sender,
+impl io::Read for WSRead {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        println!("Sync reading");
+        if let Ok(Async::Ready(Some(mut buffer))) = self.inner.poll() {
+            println!("got buffer {:?}", buffer);
+            buf.swap_with_slice(&mut buffer);
+            Ok(buffer.len())
+        } else {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "oh no!"))
         }
     }
 }
 
-impl Future for ClientWriter {
-        type Item = ();
-        type Error = ();
+struct WSWrite(Sender);
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+impl AsyncWrite for WSWrite {
+    fn shutdown(&mut self) -> Poll<(), io::Error> {
+        Ok(Async::Ready(().into()))
+    }
+}
 
-        while let Ok(msg) = self.reader.try_recv() {
-            println!("Sending {:?}", msg);
+impl io::Write for WSWrite {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let vec = buf.to_vec();
+        let size = vec.len();
+        self.0.send(Message::Binary(vec)).map(|_| size).map_err(|e| {
+            eprintln!("{:?}", e);
+            io::Error::new(io::ErrorKind::BrokenPipe, "oh no!")
+        })
+    }
 
-            match self.sender.send(Message::Text("message".to_string())) {
-                Ok(()) => {},
-                Err(e) => eprintln!("{:?}", e),
-            }
-        }
-
-        Ok(Async::NotReady)
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }

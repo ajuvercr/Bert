@@ -9,8 +9,10 @@ ws = "0.8.1"
 tokio-io = "0.1.12"
 futures = "0.1.27"
 tokio-core = "0.1.17"
+tokio-timer = "0.2.11"
 tokio = "0.1.20"
 atomic-counter = "1.0.1"
+bytes = "0.4.12"
 
 [target.heroku]
 version = "nightly"
@@ -26,3 +28,7 @@ path = "src/bin/client/main.rs"
 [[bin]]
 name = "server"
 path = "src/bin/server/main.rs"
+
+[[bin]]
+name = "echo"
+path = "src/bin/ws_echo.rs"

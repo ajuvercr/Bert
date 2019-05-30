@@ -1,8 +1,8 @@
 use futures::prelude::*;
 use tokio::io::{AsyncRead, AsyncWrite};
 use futures::try_ready;
+use futures::sync::mpsc;
 
-use std::sync::mpsc;
 use std::io::Cursor;
 
 use super::Message;
@@ -42,7 +42,7 @@ impl<S> Future for ClientReceiver<S>
                 return Ok(Async::Ready(()));
             }
 
-            self.server_handle.send(Message::ToServer(self.id, buffer)).expect("Couldn't send to server");
+            self.server_handle.try_send(Message::ToServer(self.id, buffer)).expect("Couldn't send to server");
         }
     }
 }
@@ -55,7 +55,7 @@ pub struct ClientSender<S> {
 impl<S> ClientSender<S>
     where S: 'static + Send + AsyncWrite {
     pub fn new(handle: S) -> mpsc::Sender<Vec<u8>> {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel(10);
         
         let s = Self {
             receiver, handle
@@ -74,7 +74,9 @@ impl<S> Future for ClientSender<S>
     type Error = ();
     
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        while let Ok(msg) = self.receiver.try_recv() {
+        
+        while let Some(msg) = try_ready!(self.receiver.poll()) {
+            println!("Got message {:?}", msg);
             self.handle.write_buf(&mut Cursor::new(msg)).expect("Coudln't send to client");
         }
 

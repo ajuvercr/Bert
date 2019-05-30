@@ -1,10 +1,14 @@
 
 use futures::prelude::*;
+use futures::try_ready;
+use futures::sync::mpsc;
+use futures::lazy;
+use tokio_timer;
 use tokio::io::{AsyncRead, AsyncWrite};
 use atomic_counter::RelaxedCounter;
 use atomic_counter::AtomicCounter;
 
-use std::sync::mpsc;
+// use std::sync::mpsc;
 use std::marker::PhantomData;
 use std::collections::HashMap;
 
@@ -13,6 +17,7 @@ mod server;
 
 type CreateClientFuture<R, W> = Box<Future<Item=(R, W), Error= ()> + Send>;
 
+#[derive(Debug)]
 pub enum Message {
     ToClient(u8, Vec<u8>),
     ToServer(u8, Vec<u8>),
@@ -42,7 +47,7 @@ impl<F, R, W> Broker<F, R, W>
             RR: 'static + Send + AsyncRead,
             WW: 'static + Send + AsyncWrite {
 
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel(10);
 
         let broker = Broker {
             map: HashMap::new(),
@@ -54,9 +59,12 @@ impl<F, R, W> Broker<F, R, W>
             phantom_w: PhantomData,
         };
 
-        tokio::spawn(server::ServerReceiver::new(socket_reader, sender.clone()));
+        println!("Created broker");
 
         tokio::spawn(broker);
+        tokio::spawn(server::ServerReceiver::new(socket_reader, sender.clone()));
+
+        println!("Spawned broker");
 
         let counter = RelaxedCounter::new(0);
 
@@ -68,7 +76,7 @@ impl<F, R, W> Broker<F, R, W>
 
 }
 
-fn create_client<R, W> (read: R, write: W, id: u8, handle: mpsc::Sender<Message>)
+fn create_client<R, W> (read: R, write: W, id: u8, mut handle: mpsc::Sender<Message>)
     where 
         R: 'static + Send + AsyncRead,
         W: 'static + Send + AsyncWrite {
@@ -76,8 +84,10 @@ fn create_client<R, W> (read: R, write: W, id: u8, handle: mpsc::Sender<Message>
 
     let sender = client::ClientSender::new(write);
 
-    handle.send(Message::ConnectClient(id, sender)).expect("Couldn't send message to server");
+    handle.try_send(Message::ConnectClient(id, sender)).expect("Couldn't send to server");
 }
+
+use std::time::{Duration, Instant};
 
 impl<F, R, W> Future for Broker<F, R, W> 
     where
@@ -88,42 +98,50 @@ impl<F, R, W> Future for Broker<F, R, W>
     type Error = ();
 
     fn poll(&mut self) ->  Poll<Self::Item, Self::Error> {
-        loop {
+        println!("Polling broker");
+        while let Some(msg) = try_ready!(self.receiver.poll()) {
+            println!("Got Message {:?}", msg);
+            match msg {
+                Message::ToClient(id, msg) => {
+                    println!("Sending message to client channel with id {:?} message {:?}", id, msg);
+                    match self.map.get_mut(&id) {
+                        Some(channel) => {
+                            channel.try_send(msg).expect("Couldn't send to server");;
+                        },
+                        None => {
+                            tokio::spawn({
+                                let handle = self.handle.clone();
 
-            while let Ok(msg) = self.receiver.try_recv() {
-                match msg {
-                    Message::ToClient(id, msg) => {
-                        match self.map.get(&id) {
-                            Some(channel) => {
-                                channel.send(msg).expect("Couldn't send to client channel");
-                            },
-                            None => {
-                                tokio::spawn({
-                                    let handle = self.handle.clone();
-
-                                    (self.client_not_found)().map(move |(read, write)| {
-                                        create_client(read, write, id, handle.clone());
-                                        ()
-                                    })
-                                });
-                            }
+                                (self.client_not_found)().map(move |(read, write)| {
+                                    create_client(read, write, id, handle.clone());
+                                    ()
+                                })
+                            });
                         }
-                    },
-                    Message::ToServer(id, mut msg) => {
-                        msg.push(id);
-                        self.server_write.send(msg).expect("Couldn't write to server");
-                    },
-                    Message::ConnectClient(id, channel) => {
-                        if self.map.contains_key(&id) {
-                            eprintln!("Already found client with id {}", id);
-                        } else {
-                            self.map.insert(id, channel);
-                        }
-                    },
-                }
+                    }
+                },
+                Message::ToServer(id, mut msg) => {
+                    println!("Sending message to server channel {:?} to id {:?}", msg, id);
+                    msg.push(id);
+                    self.server_write.try_send(msg).expect("Couldn't send to server");;
+                },
+                Message::ConnectClient(id, channel) => {
+                    if self.map.contains_key(&id) {
+                        eprintln!("Already found client with id {}", id);
+                    } else {
+                        let mut c = channel.clone();
+                        tokio::spawn(lazy(move || {
+                            tokio_timer::Delay::new(Instant::now() + Duration::new(2, 0)).then(move |_|{
+                                c.try_send(b"Testing\n".to_vec()).expect("bla");
+                                Ok(())
+                            })
+                        }));
+                        self.map.insert(id, channel);
+                    }
+                },
             }
         }
-
+        Ok(Async::NotReady)
     }
 }
 

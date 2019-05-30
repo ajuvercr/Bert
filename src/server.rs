@@ -1,8 +1,7 @@
 use futures::prelude::*;
 use tokio::io::{AsyncRead};
 use futures::try_ready;
-
-use std::sync::mpsc;
+use futures::sync::mpsc;
 
 use super::Message;
 
@@ -42,7 +41,7 @@ impl<S> Future for ServerReceiver<S>
 
             let id = buffer.pop().unwrap();
 
-            self.server_handle.send(Message::ToClient(id, buffer)).expect("Couldn't send to server");
+            self.server_handle.try_send(Message::ToClient(id, buffer)).expect("Couldn't send message");
         }
     }
 }

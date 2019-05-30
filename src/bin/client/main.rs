@@ -6,7 +6,7 @@ extern crate tokio_io;
 extern crate tokio;
 extern crate bert;
 
-use ws::{connect, CloseCode, Message, Sender, Handler};
+use ws::{connect, Message, Sender, Handler};
 
 use futures::Future;
 use futures::stream::Stream;
@@ -15,7 +15,7 @@ use futures::future::lazy;
 
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::io::{ReadHalf, WriteHalf};
-use tokio_core::net::{TcpListener, TcpStream};
+use tokio_core::net::{TcpListener};
 use tokio_core::reactor::Core;
 
 use std::io::{self, Write};
@@ -126,6 +126,8 @@ impl<S> Future for WriteFuture<S>
             if size == 0 {
                 return Ok(Async::NotReady);
             }
+
+            println!("Got buffer {:?}", buffer);
 
             self.sender.send(Message::Binary(buffer))
                 .map_err(|e| eprintln!("{:?}", e)).unwrap();

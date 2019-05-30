@@ -42,7 +42,7 @@ impl<S> Future for ServerReceiver<S>
 
             let id = buffer.pop().unwrap();
 
-            self.server_handle.send(Message::Data(id, buffer)).expect("Couldn't send to server");
+            self.server_handle.send(Message::ToClient(id, buffer)).expect("Couldn't send to server");
         }
     }
 }

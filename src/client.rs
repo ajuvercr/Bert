@@ -42,22 +42,28 @@ impl<S> Future for ClientReceiver<S>
                 return Ok(Async::Ready(()));
             }
 
-            self.server_handle.send(Message::Data(self.id, buffer)).expect("Couldn't send to server");
+            self.server_handle.send(Message::ToServer(self.id, buffer)).expect("Couldn't send to server");
         }
     }
 }
 
 pub struct ClientSender<S> {
-    socket: mpsc::Receiver<Vec<u8>>,
+    receiver: mpsc::Receiver<Vec<u8>>,
     handle: S,
 }
 
-impl<S> ClientSender<S> {
-    pub fn new(socket: mpsc::Receiver<Vec<u8>>, handle: S) -> Self {
+impl<S> ClientSender<S>
+    where S: 'static + Send + AsyncWrite {
+    pub fn new(handle: S) -> mpsc::Sender<Vec<u8>> {
+        let (sender, receiver) = mpsc::channel();
+        
+        let s = Self {
+            receiver, handle
+        };
 
-        Self {
-            socket, handle
-        }
+        tokio::spawn(s);
+
+        sender
     }
 }
 
@@ -68,7 +74,7 @@ impl<S> Future for ClientSender<S>
     type Error = ();
     
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        while let Ok(msg) = self.socket.try_recv() {
+        while let Ok(msg) = self.receiver.try_recv() {
             self.handle.write_buf(&mut Cursor::new(msg)).expect("Coudln't send to client");
         }
 

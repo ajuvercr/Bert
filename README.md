@@ -1,2 +1,2 @@
 # Bert
-Webserver to play youtube music
+Client-server tcp in websocket wrapper for bypassing firewalls etc.
